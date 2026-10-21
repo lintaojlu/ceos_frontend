@@ -24,6 +24,34 @@ AI任务写成可以直接粘贴给代理执行的 prompt，包含目标、约�
 如果这项没有可以交给代理执行的部分，AI任务的正文只写：${AI_TASK_UNAVAILABLE}
 正文里不要再写标题。`;
 
+/** 拆解经 agent 发出时，塞进输入框「上下文」块的规则。 */
+export const BREAKDOWN_AGENT_RULES = `你在拆解用户提到的那一条任务。
+
+你要判断两件事，再写入说明：
+1. 这条任务是否应当拆成「人类亲手做」和「交给 AI 代理做」两部分一起推进；还是几乎全是人类、或几乎全是 AI。
+2. 若需要两边一起做，各自负责哪一段、交接边界是什么。
+
+最终用 update_task 把说明写入 subtasks（note 留空）。subtasks 里恰好两项，每一项是一整段字符串：第一行标题，换行后是正文。不要把标题和正文拆成两条 subtasks。
+
+正确示例（两项）：
+["人类任务\\n亲手做的步骤…", "AI任务\\n请实现…"]
+
+错误示例（四项，禁止）：
+["人类任务", "亲手做的步骤…", "AI任务", "请实现…"]
+
+人类任务写用户要亲手做的步骤。
+AI任务写成可以直接粘贴给代理执行的 prompt，包含目标、约束和做完的标准。
+如果这项没有可以交给代理执行的部分，AI任务的正文只写：${AI_TASK_UNAVAILABLE}
+
+信息不够、没法判断要不要拆、或没法分清两边职责时，先调用 ask_choices 用选择题问清。问题必须针对这条任务本身，例如「这个任务的目的是什么？」「哪些步骤必须你本人完成？」「哪些可以交给代理？」。不要问与拆解无关的闲题，也不要猜。
+问清后再 update_task。交回 subtasks 时带上该任务原有的其他说明，只替换或追加「人类任务」「AI任务」这两条。`;
+
+/** 用户在输入框正文里看到、可编辑的短指令。 */
+export const BREAKDOWN_USER_PROMPT = '请拆解我提到的这条任务：先弄清它的目的，再判断要不要拆成人类与 AI 一起做、以及各自做什么。不清楚就用选择题问我（问任务本身）。问清后写入「人类任务」和「AI任务」两条说明。';
+
+const CONTEXT_OPEN = '【上下文】';
+const BODY_OPEN = '【正文】';
+
 const DATE_KEY = /^\d{4}-\d{2}-\d{2}$/;
 
 export class BreakdownParseError extends Error {
@@ -77,6 +105,119 @@ export function replaceBreakdownNotes(notes, humanBody, aiBody) {
     createNote(formatBreakdownNote(HUMAN_TASK_TITLE, humanBody)),
     createNote(formatBreakdownNote(AI_TASK_TITLE, aiBody))
   ];
+}
+
+/**
+ * 模型常把「人类任务 / AI任务」标题和正文拆成相邻两条。收成「标题\\n正文」各一条。
+ * @param {string[]} texts
+ * @returns {string[]}
+ */
+export function coalesceBreakdownSubtasks(texts) {
+  const list = (texts || []).map((item) => String(item || '').trim()).filter(Boolean);
+  /** @type {string[]} */
+  const out = [];
+  for (let index = 0; index < list.length; index += 1) {
+    const text = list[index];
+    const title = noteTitle(text);
+    const titleOnly = (title === HUMAN_TASK_TITLE || title === AI_TASK_TITLE) && !noteBody(text);
+    if (!titleOnly) {
+      out.push(text);
+      continue;
+    }
+    const next = list[index + 1];
+    const nextTitle = next ? noteTitle(next) : '';
+    if (next && nextTitle !== HUMAN_TASK_TITLE && nextTitle !== AI_TASK_TITLE) {
+      out.push(formatBreakdownNote(title, next));
+      index += 1;
+      continue;
+    }
+    out.push(text);
+  }
+  return out;
+}
+
+/**
+ * 写回说明时只替换「人类任务」「AI任务」，其它说明保持原样。
+ * 若传入列表里没有这两条标题，原样返回传入列表。
+ * @param {string[]} existing
+ * @param {string[]} incoming
+ * @returns {string[]}
+ */
+export function mergeBreakdownSubtasks(existing, incoming) {
+  const current = coalesceBreakdownSubtasks(existing);
+  const next = coalesceBreakdownSubtasks(incoming);
+  const human = next.find((text) => noteTitle(text) === HUMAN_TASK_TITLE);
+  const ai = next.find((text) => noteTitle(text) === AI_TASK_TITLE);
+  if (!human && !ai) return next;
+  const kept = current.filter((text) => {
+    const title = noteTitle(text);
+    return title !== HUMAN_TASK_TITLE && title !== AI_TASK_TITLE;
+  });
+  // 标题单独成条时，后面误拆出的正文不要再当普通说明留下。
+  const breakdownBodies = new Set(
+    [human, ai].filter(Boolean).map((text) => noteBody(text)).filter(Boolean)
+  );
+  const keptClean = kept.filter((text) => !breakdownBodies.has(text));
+  const oldHuman = current.find((text) => noteTitle(text) === HUMAN_TASK_TITLE);
+  const oldAi = current.find((text) => noteTitle(text) === AI_TASK_TITLE);
+  const out = [...keptClean];
+  if (human) out.push(human);
+  else if (oldHuman) out.push(oldHuman);
+  if (ai) out.push(ai);
+  else if (oldAi) out.push(oldAi);
+  return out;
+}
+
+/**
+ * @param {object} input
+ * @param {string} [input.rules]
+ * @param {string} input.title
+ * @param {string[]} [input.tagNames]
+ * @param {string[]} [input.notes]
+ * @param {Array<{ dateKey: string, text: string, completed: boolean, tagNames: string[] }>} [input.related]
+ * @returns {string}
+ */
+export function buildBreakdownContext(input) {
+  const rules = String(input?.rules || BREAKDOWN_AGENT_RULES).trim();
+  const materials = buildBreakdownPrompt(input);
+  return `${rules}\n\n${materials}`;
+}
+
+/**
+ * @param {string} context
+ * @param {string} body
+ * @returns {string}
+ */
+export function packAgentUserMessage(context, body) {
+  const ctx = String(context || '').trim();
+  const text = String(body || '').trim();
+  if (!ctx) return text;
+  if (!text) return `${CONTEXT_OPEN}\n${ctx}\n${BODY_OPEN}\n`;
+  return `${CONTEXT_OPEN}\n${ctx}\n${BODY_OPEN}\n${text}`;
+}
+
+/**
+ * @param {string} text
+ * @returns {{ context: string, body: string }}
+ */
+export function splitAgentUserMessage(text) {
+  const raw = String(text || '');
+  const pattern = /^【上下文】\n([\s\S]*?)\n【正文】\n([\s\S]*)$/;
+  const match = raw.match(pattern);
+  if (!match) return { context: '', body: raw };
+  return { context: match[1], body: match[2] };
+}
+
+/**
+ * 收起时显示的第一行摘要。
+ * @param {string} text
+ * @param {number} [max]
+ * @returns {string}
+ */
+export function contextSummary(text, max = 42) {
+  const line = String(text || '').split(/\r?\n/).map((part) => part.trim()).find(Boolean) || '';
+  if (line.length <= max) return line;
+  return `${line.slice(0, max)}…`;
 }
 
 /**

@@ -1,7 +1,8 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Events } from '../../application/event-bus.js';
+import { mentionCatalog } from '../../domain/agent/transcript.js';
 import { useApp, useShell } from '../app/context.jsx';
 import { Symbol } from '../library/index.js';
-import { mentionCatalog } from '../../domain/agent/transcript.js';
 import { navigate } from '../app/router.js';
 import { AgentComposer } from './AgentComposer.jsx';
 import { AgentTranscript } from './AgentTranscript.jsx';
@@ -27,12 +28,12 @@ export function AgentDock({ page }) {
   const panelRef = useRef(null);
   const dockHidden = phase !== 'idle' || page === 'ideas';
   const onAgentPage = page === 'agent';
-  const hasWindow = view.messages.length > 0 || view.rows.length > 0 || view.busy || !!error;
+  const hasWindow = view.messages.length > 0 || view.rows.length > 0 || view.busy || !!view.pendingChoice || !!error;
   const expanded = panelOpen && hasWindow && !onAgentPage;
   const tags = app.scheduleService.workspace.tags || [];
   const world = threads.runtime.world();
   const tail = view.messages[view.messages.length - 1];
-  useStickToBottom(panelRef, `${expanded}:${tail?.text || ''}:${view.arranging}:${view.rows.length}`);
+  useStickToBottom(panelRef, `${expanded}:${tail?.text || ''}:${(tail?.events || []).length}:${view.phase}:${view.arranging}:${view.rows.length}`);
   const catalog = mentionCatalog({
     tags: world.tags,
     ideas: world.ideas,
@@ -64,6 +65,12 @@ export function AgentDock({ page }) {
   useEffect(() => {
     if (onAgentPage) setPanelOpen(false);
   }, [onAgentPage]);
+
+  useEffect(() => {
+    return app.eventBus.on(Events.AGENT_COMPOSER_DRAFT, () => {
+      if (!onAgentPage) setPanelOpen(true);
+    });
+  }, [app, onAgentPage]);
 
   useEffect(() => {
     if (!expanded) return undefined;
@@ -103,6 +110,14 @@ export function AgentDock({ page }) {
             tags={tags}
             busy={view.busy}
             arranging={view.arranging}
+            phase={view.phase}
+            pendingChoice={view.pendingChoice}
+            onAnswerChoice={async (answers) => {
+              setError('');
+              setPanelOpen(true);
+              const result = await threads.answerChoice(answers);
+              if (!result.ok && result.error) setError(result.error);
+            }}
             onEdit={(id, patch) => { threads.editRow(id, patch); }}
             onDrop={(id) => { threads.dropRow(id); }}
             onMove={(id, direction) => { threads.moveRow(id, direction); }}

@@ -42,5 +42,6 @@ export const Events = {
   LLM_SETTINGS_UPDATED: 'llm-settings:updated',
   UI_PREFS_UPDATED: 'ui-prefs:updated',
   POMODORO_UPDATED: 'pomodoro:updated',
-  AGENT_UPDATED: 'agent:updated'
+  AGENT_UPDATED: 'agent:updated',
+  AGENT_COMPOSER_DRAFT: 'agent:composer-draft'
 };

@@ -12,7 +12,7 @@ import { HomePage } from '../pages/home/HomePage.jsx';
 import { TasksPage } from '../pages/tasks/TasksPage.jsx';
 import { TasksTopBar } from '../pages/tasks/TasksTopBar.jsx';
 import { IdeasPage } from '../pages/ideas/IdeasPage.jsx';
-import { DEFAULT_IDEA_FILTER } from '../pages/ideas/IdeaStatusFilter.jsx';
+import { DEFAULT_IDEA_FILTER, IdeaStatusFilter } from '../pages/ideas/IdeaStatusFilter.jsx';
 import { msUntilNextHour, quoteForHour } from '../../domain/quotes/quote-library.js';
 import { SIDEBAR_WIDTH, normalizeSidebarWidth } from '../../infrastructure/storage/ui-prefs-repository.js';
 
@@ -43,7 +43,7 @@ function QuoteTitle() {
   );
 }
 
-function TopBar({ page, sidebarHidden, onToggle, toggleRef, onCreateIdea }) {
+function TopBar({ page, sidebarHidden, onToggle, toggleRef, onCreateIdea, ideaFilter, onIdeaFilter }) {
   useShell();
   const title = PAGE_TITLE[page] || '';
   return (
@@ -70,9 +70,12 @@ function TopBar({ page, sidebarHidden, onToggle, toggleRef, onCreateIdea }) {
             <div className="topbar-heading">
               <h1 className="topbar-title">{title}</h1>
               {page === 'ideas' ? (
-                <button type="button" className="idea-compose" aria-label="新建灵感" onClick={onCreateIdea}>
-                  <Icon name="compose" />
-                </button>
+                <span className="idea-heading-tools">
+                  <button type="button" className="idea-compose" aria-label="新建灵感" onClick={onCreateIdea}>
+                    <Icon name="compose" />
+                  </button>
+                  <IdeaStatusFilter value={ideaFilter} onChange={onIdeaFilter} />
+                </span>
               ) : null}
             </div>
           ) : null}
@@ -212,6 +215,8 @@ function Shell() {
           onToggle={toggleSidebar}
           toggleRef={toggleRef}
           onCreateIdea={createIdea}
+          ideaFilter={ideaFilter}
+          onIdeaFilter={setIdeaFilter}
         />
         {sidebarHidden ? null : (
           <Sidebar
@@ -227,7 +232,6 @@ function Shell() {
           {page === 'ideas' ? (
             <IdeasPage
               filter={ideaFilter}
-              onFilter={setIdeaFilter}
               openIdeaId={openIdeaId}
               onOpenIdea={setOpenIdeaId}
             />

@@ -1,9 +1,11 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Events } from '../../../application/event-bus.js';
 import { normalizeNotes } from '../../../domain/schedule/daily-task.js';
 import { displayTagColor } from '../../../domain/schedule/fixed-tags.js';
 import { AI_TASK_TITLE, HUMAN_TASK_TITLE, noteBody, noteTitle } from '../../../domain/schedule/task-breakdown.js';
 import { todayKey } from '../../../domain/shared/date-key.js';
 import { useApp } from '../../app/context.jsx';
+import { flyTextToComposer } from '../../agent/fly-to-composer.js';
 import { Checkbox, ContextMenu, Symbol } from '../../library/index.js';
 import { TaskText } from './TaskText.jsx';
 
@@ -76,6 +78,7 @@ function NoteCard({ note, onFocus }) {
 export function TaskRow({ task, type, onEdit, dropEdge, dragging = false, onReorderStart }) {
   const app = useApp();
   const drag = useRef(false);
+  const rowRef = useRef(null);
   const [breaking, setBreaking] = useState(false);
   const [breakError, setBreakError] = useState('');
   const [tagState, setTagState] = useState('');
@@ -97,7 +100,10 @@ export function TaskRow({ task, type, onEdit, dropEdge, dragging = false, onReor
     setBreaking(true);
     setBreakError('');
     try {
-      await app.taskBreakdownService.breakdown(type, task.id);
+      const draft = app.taskBreakdownService.prepareComposer(type, task.id);
+      const from = rowRef.current?.getBoundingClientRect();
+      if (from) await flyTextToComposer(from, draft.flyText);
+      app.eventBus.emit(Events.AGENT_COMPOSER_DRAFT, draft);
     } catch (error) {
       setBreakError(error?.message || '拆解失败');
     } finally {
@@ -132,6 +138,7 @@ export function TaskRow({ task, type, onEdit, dropEdge, dragging = false, onReor
   return (
     <div className={`task-block${edge}${dragging ? ' is-dragging' : ''}`}>
       <div
+        ref={rowRef}
         className="task-row is-reorderable"
         data-task-id={task.id}
         data-task-type={type}

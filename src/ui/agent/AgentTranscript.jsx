@@ -1,5 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { splitAgentUserMessage } from '../../domain/schedule/task-breakdown.js';
 import { DeleteButton, Markdown, Symbol } from '../library/index.js';
+import { activityStatus, toolHint, toolSteps, toolTitle } from './activity.js';
+import { AgentChoiceCard } from './AgentChoiceCard.jsx';
+import { AgentContextPill } from './AgentContextPill.jsx';
 import { repairStreamingMarkdown } from './stream-markdown.js';
 
 function tagName(tags, id) {
@@ -7,9 +11,18 @@ function tagName(tags, id) {
   return tags.find((tag) => tag.id === id)?.name || '不挂标签';
 }
 
-function preview(value) {
-  const text = typeof value === 'string' ? value : JSON.stringify(value ?? '');
-  return text.length > 180 ? `${text.slice(0, 180)}…` : text;
+function useElapsed(active) {
+  const [seconds, setSeconds] = useState(1);
+  useEffect(() => {
+    if (!active) return undefined;
+    const started = Date.now();
+    setSeconds(1);
+    const timer = window.setInterval(() => {
+      setSeconds(Math.max(1, Math.floor((Date.now() - started) / 1000)));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [active]);
+  return seconds;
 }
 
 /**
@@ -19,6 +32,9 @@ function preview(value) {
  * @param {any[]} props.tags
  * @param {boolean} props.busy
  * @param {boolean} [props.arranging]
+ * @param {string} [props.phase]
+ * @param {{ callId: string, questions: any[] } | null} [props.pendingChoice]
+ * @param {(answers: any) => void} [props.onAnswerChoice]
  * @param {(id: string, patch: Record<string, any>) => void} props.onEdit
  * @param {(id: string) => void} props.onDrop
  * @param {(id: string, direction: -1 | 1) => void} props.onMove
@@ -26,7 +42,22 @@ function preview(value) {
  * @param {() => void} props.onCancel
  * @param {'dock' | 'page'} [props.layout]
  */
-export function AgentTranscript({ messages, rows, tags, busy, arranging = false, onEdit, onDrop, onMove, onConfirm, onCancel, layout = 'dock' }) {
+export function AgentTranscript({
+  messages,
+  rows,
+  tags,
+  busy,
+  arranging = false,
+  phase = 'idle',
+  pendingChoice = null,
+  onAnswerChoice,
+  onEdit,
+  onDrop,
+  onMove,
+  onConfirm,
+  onCancel,
+  layout = 'dock'
+}) {
   const page = layout === 'page';
   const last = messages[messages.length - 1];
   const waiting = arranging && last?.role !== 'assistant';
@@ -34,18 +65,7 @@ export function AgentTranscript({ messages, rows, tags, busy, arranging = false,
     <div className={page ? 'agent-log is-page' : 'agent-log'} aria-live="polite">
       {messages.map((item, index) => (
         item.role === 'user' ? (
-          <div key={`user-${index}`} className={page ? 'agent-turn agent-turn-user' : 'agent-turn'}>
-            {item.mentions?.length ? (
-              <div className="agent-chips">
-                {item.mentions.map((mention) => (
-                  <span key={`${mention.kind}:${mention.id}`} className="agent-chip is-static">{mention.label}</span>
-                ))}
-              </div>
-            ) : null}
-            {page
-              ? <p className="agent-bubble">{item.text}</p>
-              : <p className="agent-line agent-line-user">{item.text}</p>}
-          </div>
+          <UserTurn key={`user-${index}`} message={item} layout={layout} />
         ) : (
           <AssistantTurn
             key={`assistant-${index}`}
@@ -53,18 +73,18 @@ export function AgentTranscript({ messages, rows, tags, busy, arranging = false,
             layout={layout}
             pending={arranging && index === messages.length - 1}
             streaming={busy && index === messages.length - 1}
+            phase={index === messages.length - 1 ? phase : 'idle'}
+            choice={pendingChoice && index === messages.length - 1 ? pendingChoice : null}
+            onAnswerChoice={onAnswerChoice}
+            choiceDisabled={busy}
           />
         )
       ))}
       {waiting ? (
-        page
-          ? (
-            <div className="agent-turn agent-turn-assistant">
-              <Identity />
-              <p className="agent-status">正在安排…</p>
-            </div>
-          )
-          : <p className="agent-line">正在安排…</p>
+        <div className={page ? 'agent-turn agent-turn-assistant' : 'agent-turn'}>
+          {page ? <Identity /> : null}
+          <LiveStatus phase="wait" events={[]} text="" />
+        </div>
       ) : null}
       {rows.length ? (
         <div className="agent-rows">
@@ -185,42 +205,36 @@ function Identity() {
   );
 }
 
-function AssistantTurn({ message, layout, pending, streaming }) {
+function UserTurn({ message, layout }) {
   const page = layout === 'page';
   const [open, setOpen] = useState(false);
-  const [thinkOpen, setThinkOpen] = useState(false);
-  const events = message.events || [];
-  const reasoning = events.filter((event) => event.kind === 'reasoning');
-  const steps = events.filter((event) => event.kind !== 'reasoning');
-  const process = events.length ? (
-    <div className="agent-process">
-      <button type="button" className={page ? 'agent-status' : 'agent-process-toggle'} onClick={() => setOpen((value) => !value)}>
-        过程
-        <span aria-hidden="true">{open ? '⌄' : '›'}</span>
-      </button>
-      {open ? (
-        <div className="agent-process-body">
-          {reasoning.length ? (
-            <div>
-              <button type="button" className="agent-process-toggle" onClick={() => setThinkOpen((value) => !value)}>
-                深度思考
-              </button>
-              {thinkOpen ? reasoning.map((event, index) => (
-                <p key={`think-${index}`} className="agent-process-line">{event.text}</p>
-              )) : null}
-            </div>
-          ) : null}
-          {steps.map((event, index) => (
-            <p key={`step-${index}`} className="agent-process-line">
-              {event.kind === 'tool_call'
-                ? `调用 ${event.name} ${preview(event.arguments)}`
-                : `${event.ok ? '结果' : '失败'} ${event.name} ${preview(event.payload)}`}
-            </p>
+  const parts = splitAgentUserMessage(message.text || '');
+  const body = (
+    <div className={page ? 'agent-bubble agent-bubble-user' : 'agent-line agent-line-user'}>
+      <AgentContextPill text={parts.context} open={open} onOpenChange={setOpen} />
+      {parts.body ? <span className="agent-user-body">{parts.body}</span> : null}
+    </div>
+  );
+  return (
+    <div className={page ? 'agent-turn agent-turn-user' : 'agent-turn'}>
+      {message.mentions?.length ? (
+        <div className="agent-chips">
+          {message.mentions.map((mention) => (
+            <span key={`${mention.kind}:${mention.id}`} className="agent-chip is-static">{mention.label}</span>
           ))}
         </div>
       ) : null}
+      {body}
     </div>
-  ) : null;
+  );
+}
+
+function AssistantTurn({ message, layout, pending, streaming, phase, choice, onAnswerChoice, choiceDisabled }) {
+  const page = layout === 'page';
+  const events = message.events || [];
+  const steps = toolSteps(events);
+  const reasoning = events.filter((event) => event.kind === 'reasoning');
+  const live = pending || streaming;
   const shown = page && streaming ? repairStreamingMarkdown(message.text) : message.text;
   const body = message.text
     ? (page ? <div className="agent-answer"><Markdown text={shown} /></div> : <p className="agent-line">{message.text}</p>)
@@ -228,10 +242,74 @@ function AssistantTurn({ message, layout, pending, streaming }) {
   return (
     <div className={page ? 'agent-turn agent-turn-assistant' : 'agent-turn'}>
       {page ? <Identity /> : null}
-      {page ? process : null}
+      {live ? <Elapsed /> : null}
+      {reasoning.length ? <Thinking events={reasoning} /> : null}
+      {steps.length ? (
+        <div className="agent-steps-list">
+          {steps.map((step) => <ToolStep key={step.id} step={step} />)}
+        </div>
+      ) : null}
+      {live ? <LiveStatus phase={phase} events={events} text={message.text} showElapsed={false} /> : null}
       {body}
-      {pending ? <p className="agent-status">正在安排…</p> : null}
-      {page ? null : process}
+      {choice ? (
+        <AgentChoiceCard
+          questions={choice.questions}
+          disabled={choiceDisabled}
+          onDone={(answers) => onAnswerChoice?.(answers)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function Elapsed() {
+  const seconds = useElapsed(true);
+  return <p className="agent-elapsed">已处理 {seconds}s</p>;
+}
+
+function LiveStatus({ phase, events, text, showElapsed = true }) {
+  const status = activityStatus({ phase, events, text });
+  return (
+    <>
+      {showElapsed ? <Elapsed /> : null}
+      {status ? <p className="agent-status">{status}</p> : null}
+    </>
+  );
+}
+
+function Thinking({ events }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="agent-step">
+      <button type="button" className="agent-step-toggle" onClick={() => setOpen((value) => !value)}>
+        <Symbol name="search" size={14} />
+        <span className="agent-step-title">深度思考</span>
+        <Symbol name={open ? 'chevron-down' : 'chevron-right'} size={14} />
+      </button>
+      {open ? events.map((event, index) => (
+        <p key={`think-${index}`} className="agent-process-line">{event.text}</p>
+      )) : null}
+    </div>
+  );
+}
+
+function ToolStep({ step }) {
+  const [open, setOpen] = useState(false);
+  const hint = toolHint(step.name, step.arguments);
+  const questions = Array.isArray(step.questions) ? step.questions : [];
+  const detail = questions.length
+    ? questions.map((item) => item?.prompt || '').filter(Boolean).join('\n')
+    : JSON.stringify({ parameters: step.arguments || {} }, null, 2);
+  return (
+    <div className="agent-step">
+      <button type="button" className="agent-step-toggle" onClick={() => setOpen((value) => !value)}>
+        <Symbol name="search" size={14} />
+        <span className="agent-step-title">{toolTitle(step.name)}</span>
+        {hint ? <span className="agent-step-hint">{hint}</span> : null}
+        {step.ok === false ? <span className="agent-step-fail">失败</span> : null}
+        <Symbol name={open ? 'chevron-down' : 'chevron-right'} size={14} />
+      </button>
+      {open ? <pre className="agent-step-panel">{detail}</pre> : null}
     </div>
   );
 }

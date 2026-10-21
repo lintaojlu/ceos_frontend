@@ -1,5 +1,6 @@
 import { bodyAfterTitle, ideaTitle } from '../ideas/idea-document.js';
 import { normalizeNotes, normalizeTagIds } from '../schedule/daily-task.js';
+import { coalesceBreakdownSubtasks, mergeBreakdownSubtasks, noteTitle, AI_TASK_TITLE, HUMAN_TASK_TITLE } from '../schedule/task-breakdown.js';
 import { WRITE_NAMES } from './catalog.js';
 
 /**
@@ -35,12 +36,20 @@ export function identityKey(call) {
  */
 function cleanSubtasks(args) {
   if (!Array.isArray(args?.subtasks)) return [];
-  return args.subtasks.map((item) => String(item || '').trim()).filter(Boolean);
+  return coalesceBreakdownSubtasks(args.subtasks.map((item) => String(item || '').trim()).filter(Boolean));
 }
 
 /** @param {any} task */
 function storedNotes(task) {
   return normalizeNotes(task?.notes, { note: task?.note, subtasks: task?.subtasks }).map((item) => item.text);
+}
+
+/** @param {string[]} texts */
+function hasBreakdownTitle(texts) {
+  return (texts || []).some((text) => {
+    const title = noteTitle(text);
+    return title === HUMAN_TASK_TITLE || title === AI_TASK_TITLE;
+  });
 }
 
 /**
@@ -201,6 +210,9 @@ export function completeWriteArgs(name, raw, world) {
       if (!raw || raw.list == null) args.list = found.list;
       if (!raw || raw.tagId == null) args.tagId = normalizeTagIds(found.task)[0] || '';
       if (!raw || raw.subtasks == null) args.subtasks = storedNotes(found.task);
+      else if (hasBreakdownTitle(args.subtasks)) {
+        args.subtasks = mergeBreakdownSubtasks(storedNotes(found.task), args.subtasks);
+      }
     }
   }
   if (name === 'pickup_idea') {
@@ -333,7 +345,11 @@ export function editStaged(staged, id, patch) {
     if (patch.note != null) args.note = String(patch.note);
     if (patch.list === 'required' || patch.list === 'optional') args.list = patch.list;
     if (patch.tagId != null) args.tagId = String(patch.tagId);
-    if (Array.isArray(patch.subtasks)) args.subtasks = patch.subtasks.map((item) => String(item || '').trim()).filter(Boolean);
+    if (Array.isArray(patch.subtasks)) {
+      args.subtasks = coalesceBreakdownSubtasks(
+        patch.subtasks.map((item) => String(item || '').trim()).filter(Boolean)
+      );
+    }
     if (patch.date != null) args.date = String(patch.date);
     if (patch.completed != null) args.completed = !!patch.completed;
     return { ...call, args };

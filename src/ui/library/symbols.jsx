@@ -50,9 +50,11 @@ export function Symbol({ name, size = 18 }) {
   }
   if (name === 'compose') {
     return (
-      <svg {...common} strokeWidth="1.7">
-        <path d="M14.2 5.4 18.6 9.8 9.2 19.2 4.6 19.4 4.8 14.8z" />
-        <path d="M12.4 7.2 16.8 11.6" />
+      <svg {...common}>
+        <rect x="4" y="4" width="16" height="16" rx="3.2" />
+        <path d="M8.6 15.6 13.4 10.8" />
+        <path d="M12.2 9.6 14.6 12" />
+        <path d="M14.4 8.4 18.4 4.4" />
       </svg>
     );
   }
@@ -129,6 +131,12 @@ export function Symbol({ name, size = 18 }) {
   }
   if (name === 'check') {
     return <svg {...common}><path d="M5 12.5 9.5 17 19 7" /></svg>;
+  }
+  if (name === 'edit') {
+    return <svg {...common}><path d="M4 20h4l10.5-10.5a1.5 1.5 0 0 0-2.1-2.1L5.9 17.9z" /><path d="M13.2 6.8l2.1 2.1" /></svg>;
+  }
+  if (name === 'file') {
+    return <svg {...common}><path d="M7 3.5h7l3.5 3.5V20a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1z" /><path d="M14 3.5V8h3.5" /></svg>;
   }
   if (name === 'history') {
     return (

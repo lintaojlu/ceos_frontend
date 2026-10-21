@@ -61,7 +61,11 @@ export function buildAgentContext(template, input) {
     today,
     weekday: weekdayLabel(today),
     writableDates: writableDates.join('、') || '无',
-    tags: tags.length ? tags.map((tag) => `${tag.name} id=${tag.id}`).join('\n') : '无',
+    tags: tags.length ? tags.map((tag) => {
+      const line = `${tag.name} id=${tag.id}`;
+      const boundary = String(tag.description || '').trim();
+      return boundary ? `${line}：${boundary}` : line;
+    }).join('\n') : '无',
     tasks: tasks || '无',
     readyIdeas: ready.length ? ready.map((idea) => idea.text).filter(Boolean).join('\n') || '无' : '无',
     openDays: openDays.length ? openDays.map((row) => `${row.date} ${row.openCount}条`).join('\n') : '无'

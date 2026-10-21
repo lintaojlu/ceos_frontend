@@ -1,5 +1,6 @@
 import { AgentSession } from './agent-session.js';
 import { Events } from './event-bus.js';
+import { CHOICE_CLOSED_MESSAGE, formatChoiceAnswers } from '../domain/agent/choices.js';
 import { parseIndex, replayTranscript, stripSkillToken, threadTitle } from '../domain/agent/transcript.js';
 
 function createThreadId() {
@@ -115,7 +116,9 @@ export class AgentThreads {
       messages: this.session.messages,
       rows: this.busy ? [] : this.session.rows(),
       busy: this.busy,
-      arranging: this.busy && this.session.phase !== 'text',
+      arranging: this.busy && this.session.phase !== 'text' && this.session.phase !== 'choose',
+      phase: this.session.phase,
+      pendingChoice: this.session.pendingChoice,
       persisted: this.meta.persisted,
       threads: this.sorted()
     };
@@ -265,11 +268,25 @@ export class AgentThreads {
       return await this.session.submit(raw, { mentions });
     } finally {
       this.busy = false;
-      this.session.phase = 'idle';
+      if (this.session.phase !== 'choose') this.session.phase = 'idle';
       this.session.abort = null;
       await this.touch();
       this.emitUpdate();
     }
+  }
+
+  /**
+   * @param {Array<{ questionId: string, skipped?: boolean, optionId?: string, optionLabel?: string, otherText?: string }> | 'closed'} answers
+   */
+  async answerChoice(answers) {
+    if (this.busy) return { ok: false, error: '还在回复', rows: this.session.rows() };
+    const pending = this.session.pendingChoice;
+    if (!pending) return { ok: false, error: '没有待回答的选择题', rows: this.session.rows() };
+    const text = answers === 'closed'
+      ? CHOICE_CLOSED_MESSAGE
+      : formatChoiceAnswers(pending.questions, answers);
+    this.session.pendingChoice = null;
+    return this.submit(text, []);
   }
 
   stop() {

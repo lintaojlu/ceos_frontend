@@ -1,5 +1,6 @@
 import { AGENT_SYSTEM } from '../domain/agent/prompt.js';
-import { READ_NAMES, WRITE_NAMES, toolsForTurn } from '../domain/agent/catalog.js';
+import { CHOICE_NAMES, READ_NAMES, WRITE_NAMES, toolsForTurn } from '../domain/agent/catalog.js';
+import { normalizeAskChoices } from '../domain/agent/choices.js';
 import { classifyTurn } from '../domain/agent/turn.js';
 import { tagDirective } from '../domain/agent/tag-intent.js';
 import { formatMentions } from '../domain/agent/transcript.js';
@@ -40,6 +41,8 @@ export class AgentSession {
     this.staged = [];
     /** @type {string[]} */
     this.detailDates = [];
+    /** @type {{ callId: string, questions: any[] } | null} */
+    this.pendingChoice = null;
     /** @type {any[]} */
     this.modelMessages = [{ role: 'system', content: AGENT_SYSTEM }];
   }
@@ -98,6 +101,7 @@ export class AgentSession {
       .map((item) => ({ role: item.role, text: item.text }));
     this.staged = Array.isArray(state?.staged) ? state.staged : [];
     this.detailDates = [];
+    this.pendingChoice = null;
     this.modelMessages = [{ role: 'system', content: AGENT_SYSTEM }, ...(state?.modelMessages || [])];
     this.permission = state?.permission || 'default';
     this.model = state?.model || '';
@@ -179,9 +183,28 @@ export class AgentSession {
       arguments: call.arguments || {}
     });
     await this.emit({ type: 'tool_call', id: call.id, name: call.name, arguments: call.arguments || {} });
+    this.phase = 'tools';
+    this.live();
 
     /** @type {any} */
     let payload;
+    if (CHOICE_NAMES.has(call.name)) {
+      const normalized = normalizeAskChoices(call.arguments || {});
+      if (!normalized.ok) {
+        payload = { error: normalized.error };
+        await this.finishTool(call, false, payload);
+        return payload;
+      }
+      this.pendingChoice = { callId: call.id, questions: normalized.questions };
+      this.ensureAssistant().events.push({
+        kind: 'ask_choices',
+        id: call.id,
+        questions: normalized.questions
+      });
+      payload = { status: 'waiting_for_user' };
+      await this.finishTool(call, true, payload);
+      return payload;
+    }
     if (READ_NAMES.has(call.name)) {
       const result = this.runtime.read(call.name, call.arguments || {}, this.detailDates);
       this.detailDates = result.detailDates || this.detailDates;
@@ -259,6 +282,7 @@ export class AgentSession {
     const turn = classifyTurn(raw, { viewedKey: world.viewedKey, today: world.today });
     turn.tagDirective = tagDirective(raw, world.tags);
     this.detailDates = [];
+    this.pendingChoice = null;
     this.messages.push({ role: 'user', text: raw, mentions });
     this.transcript.push({ role: 'user', text: raw });
     await this.record('user_message', { text: raw, turn });
@@ -270,7 +294,7 @@ export class AgentSession {
     await this.emit({ type: 'user', text: raw, mentions, modelContent });
     await this.pushModel({ role: 'user', content: modelContent });
     const tools = toolsForTurn(turn, this.permission);
-    if (!this.abort || this.phase === 'idle') this.prepare();
+    if (!this.abort || this.phase === 'idle' || this.phase === 'choose') this.prepare();
     this.phase = 'wait';
     this.live();
 
@@ -340,6 +364,7 @@ export class AgentSession {
           function: { name: call.name, arguments: JSON.stringify(call.arguments || {}) }
         }))
       });
+      let awaitingChoice = false;
       for (const call of toolCalls) {
         if (this.isAbort()) return this.halt();
         const payload = await this.handleTool(call, turn);
@@ -349,10 +374,27 @@ export class AgentSession {
           tool_call_id: call.id,
           content: JSON.stringify(payload)
         });
+        if (CHOICE_NAMES.has(call.name) && this.pendingChoice) awaitingChoice = true;
       }
+      if (awaitingChoice) return this.pauseForChoice();
     }
 
     return this.finish();
+  }
+
+  async pauseForChoice() {
+    const bubble = this.ensureAssistant();
+    if (!bubble.text) {
+      bubble.text = '先确认这几项：';
+      this.pendingModelText = bubble.text;
+    }
+    this.phase = 'choose';
+    this.transcript.push({ role: 'assistant', text: bubble.text });
+    await this.emit({ type: 'assistant', text: bubble.text, awaitingChoice: true });
+    await this.record('assistant_message', { text: bubble.text, awaitingChoice: true });
+    await this.pushPendingAnswer();
+    this.live();
+    return { ok: true, awaitingChoice: true, text: bubble.text, rows: this.rows() };
   }
 
   /** @param {string} message */

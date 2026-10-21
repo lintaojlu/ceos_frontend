@@ -94,6 +94,36 @@ export function commitNoteDraft(notes, draft) {
 }
 
 /**
+ * 把拆解时误拆成「标题一条 + 正文一条」的说明收成一条。
+ * @param {TaskNote[]} notes
+ * @returns {TaskNote[]}
+ */
+function coalesceBreakdownNotes(notes) {
+  /** @type {TaskNote[]} */
+  const out = [];
+  for (let index = 0; index < notes.length; index += 1) {
+    const note = notes[index];
+    const lines = String(note.text || '').split('\n');
+    const title = String(lines[0] || '').trim();
+    const body = lines.slice(1).join('\n').trim();
+    const titleOnly = (title === '人类任务' || title === 'AI任务') && !body;
+    if (!titleOnly) {
+      out.push(note);
+      continue;
+    }
+    const next = notes[index + 1];
+    const nextTitle = next ? String(String(next.text || '').split('\n')[0] || '').trim() : '';
+    if (next && nextTitle !== '人类任务' && nextTitle !== 'AI任务') {
+      out.push(createNote(`${title}\n${next.text}`, { id: note.id }));
+      index += 1;
+      continue;
+    }
+    out.push(note);
+  }
+  return out;
+}
+
+/**
  * 已有的单条说明，加上原来的子任务正文，收成多条说明。
  * 已经是 notes 数组时直接用它，不再把旧字段再并一次。
  * @param {any} raw
@@ -101,22 +131,25 @@ export function commitNoteDraft(notes, draft) {
  * @returns {TaskNote[]}
  */
 export function normalizeNotes(raw, legacy = {}) {
+  /** @type {TaskNote[]} */
+  let notes;
   if (Array.isArray(raw)) {
-    return raw
+    notes = raw
       .filter((item) => item && (item.id || item.text))
       .map((item) => createNote(item.text || '', { id: item.id }))
       .filter((item) => item.text);
+  } else {
+    notes = [];
+    const note = String(legacy.note || '').trim();
+    if (note) notes.push(createNote(note));
+    const subtasks = Array.isArray(legacy.subtasks) ? legacy.subtasks : [];
+    subtasks.forEach((item) => {
+      const text = String(item?.text || (typeof item === 'string' ? item : '')).trim();
+      if (!text) return;
+      notes.push(createNote(text, { id: typeof item?.id === 'string' ? item.id : undefined }));
+    });
   }
-  const notes = [];
-  const note = String(legacy.note || '').trim();
-  if (note) notes.push(createNote(note));
-  const subtasks = Array.isArray(legacy.subtasks) ? legacy.subtasks : [];
-  subtasks.forEach((item) => {
-    const text = String(item?.text || (typeof item === 'string' ? item : '')).trim();
-    if (!text) return;
-    notes.push(createNote(text, { id: typeof item?.id === 'string' ? item.id : undefined }));
-  });
-  return notes;
+  return coalesceBreakdownNotes(notes);
 }
 
 /**

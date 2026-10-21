@@ -107,8 +107,11 @@ export class ScheduleService {
     });
   }
 
-  /** @param {string} name */
-  addTag(name) {
+  /**
+   * @param {string} name
+   * @param {string} [description] 什么情况下任务属于这个标签
+   */
+  addTag(name, description = '') {
     const trimmed = String(name || '').trim();
     if (!trimmed) return null;
     if (!Array.isArray(this.workspace.tags)) this.workspace.tags = [];
@@ -116,6 +119,7 @@ export class ScheduleService {
     const tag = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       name: trimmed,
+      description: String(description || '').trim(),
       color: nextTagColor(this.workspace.tags),
       pinned: false
     };
@@ -128,14 +132,16 @@ export class ScheduleService {
   /**
    * @param {string} id
    * @param {string} name
+   * @param {string} [description] 传入时一并改描述；不传则只改名字
    */
-  renameTag(id, name) {
+  renameTag(id, name, description) {
     const trimmed = String(name || '').trim();
     if (!trimmed) return null;
     const tag = this._findTag(id);
     if (!tag) return null;
     if ((this.workspace.tags || []).some((item) => item.id !== id && item.name === trimmed)) return null;
     tag.name = trimmed;
+    if (description !== undefined) tag.description = String(description || '').trim();
     this.persist();
     this.eventBus.emit(Events.TASKS_UPDATED, { reason: 'tag:rename' });
     return tag;
@@ -179,12 +185,14 @@ export class ScheduleService {
 
   /**
    * Attach a tag by name on one day's copy. Reuse a same-named tag.
+   * description 只在新建时写入，已有同名标签的描述保持原样。
    * @param {'required'|'optional'} type
    * @param {string} taskId
    * @param {string} name
    * @param {string} [dateKey]
+   * @param {string} [description]
    */
-  attachTagNamed(type, taskId, name, dateKey = this.getDateKey()) {
+  attachTagNamed(type, taskId, name, dateKey = this.getDateKey(), description = '') {
     const trimmed = String(name || '').trim();
     if (!trimmed) return null;
     const day = this.scheduleRepo.ensureDay(this.data, dateKey);
@@ -192,7 +200,7 @@ export class ScheduleService {
     if (!task) return null;
     let tag = (this.workspace.tags || []).find((item) => item.name === trimmed) || null;
     if (!tag) {
-      tag = this.addTag(trimmed);
+      tag = this.addTag(trimmed, description);
       if (!tag) return null;
     }
     const ids = normalizeTagIds(task);

@@ -1,13 +1,12 @@
 /**
- * 用已有的模型设置，把一条任务拆成两条说明并写回该任务所在的那一天。
+ * 把一条任务整理成 agent 输入框草稿：上下文块 + 短正文 + 任务 mention。
+ * 真正的拆解由用户发送后走 agent。
  */
 
 import { normalizeNotes, normalizeTagIds } from '../domain/schedule/daily-task.js';
 import {
-  BREAKDOWN_SYSTEM,
-  buildBreakdownPrompt,
-  parseBreakdown,
-  replaceBreakdownNotes,
+  BREAKDOWN_USER_PROMPT,
+  buildBreakdownContext,
   selectRelatedTasks
 } from '../domain/schedule/task-breakdown.js';
 
@@ -15,19 +14,17 @@ export class TaskBreakdownService {
   /**
    * @param {object} deps
    * @param {import('./schedule-service.js').ScheduleService} deps.scheduleService
-   * @param {import('./llm-service.js').LlmService} deps.llmService
    */
-  constructor({ scheduleService, llmService }) {
+  constructor({ scheduleService }) {
     this.scheduleService = scheduleService;
-    this.llmService = llmService;
   }
 
   /**
    * @param {'required'|'optional'} type
    * @param {string} taskId
-   * @returns {Promise<Array<{ id: string, text: string }>>}
+   * @returns {{ context: string, body: string, mentions: any[], flyText: string, dateKey: string }}
    */
-  async breakdown(type, taskId) {
+  prepareComposer(type, taskId) {
     const dateKey = this.scheduleService.getDateKey();
     const task = this.scheduleService.findTaskOnDate(dateKey, type, taskId);
     if (!task) throw new Error('这条任务已经不在了');
@@ -41,8 +38,9 @@ export class TaskBreakdownService {
       tagIds
     });
     const notes = normalizeNotes(task.notes, { note: task.note, subtasks: task.subtasks });
-    const user = buildBreakdownPrompt({
-      title: task.text || '',
+    const title = task.text || '';
+    const context = buildBreakdownContext({
+      title,
       tagNames: namesFor(tagIds, nameById),
       notes: notes.map((note) => note.text),
       related: related.map((item) => ({
@@ -52,20 +50,15 @@ export class TaskBreakdownService {
         tagNames: namesFor(item.tagIds, nameById)
       }))
     });
-
-    const raw = await this.llmService.complete({ slot: 'breakdownModel', system: BREAKDOWN_SYSTEM, user });
-    const parsed = parseBreakdown(raw);
-
-    const fresh = this.scheduleService.findTaskOnDate(dateKey, type, taskId);
-    if (!fresh) throw new Error('这条任务已经不在了');
-    const next = replaceBreakdownNotes(
-      normalizeNotes(fresh.notes, { note: fresh.note, subtasks: fresh.subtasks }),
-      parsed.humanBody,
-      parsed.aiBody
-    );
-    const saved = this.scheduleService.setTaskNotes(dateKey, type, taskId, next);
-    if (!saved) throw new Error('这条任务已经不在了');
-    return saved.notes;
+    const body = BREAKDOWN_USER_PROMPT;
+    const mentions = [{
+      kind: 'task',
+      id: task.id,
+      title,
+      date: dateKey,
+      label: `${dateKey} ${title}`.trim()
+    }];
+    return { context, body, mentions, flyText: body, dateKey };
   }
 }
 

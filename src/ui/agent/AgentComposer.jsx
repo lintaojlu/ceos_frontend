@@ -1,8 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useApp } from '../app/context.jsx';
+import { Events } from '../../application/event-bus.js';
 import { Symbol } from '../library/index.js';
 import { AGENT_SKILLS, PERMISSIONS, filterMentions } from '../../domain/agent/transcript.js';
+import { packAgentUserMessage } from '../../domain/schedule/task-breakdown.js';
 import { holdImeEnter, imeCompositionProps, useImeEnterGuard } from '../keyboard/ime-enter.js';
+import { AgentContextPill } from './AgentContextPill.jsx';
 
 const KIND_LABEL = { day: '日期', task: '任务', tag: '标签', idea: '灵感' };
 
@@ -48,6 +51,8 @@ function removeToken(value, token) {
 export function AgentComposer({ permission, model, busy, catalog, onPermission, onModel, onSend, onStop, onFocus }) {
   const app = useApp();
   const [draft, setDraft] = useState('');
+  const [context, setContext] = useState('');
+  const [contextOpen, setContextOpen] = useState(false);
   const [mentions, setMentions] = useState([]);
   const [models, setModels] = useState(/** @type {string[]} */ ([]));
   const [menu, setMenu] = useState(/** @type {null | { kind: 'mention' | 'skill', query: string, token: any }} */ (null));
@@ -75,6 +80,27 @@ export function AgentComposer({ permission, model, busy, catalog, onPermission, 
       live = false;
     };
   }, [app]);
+
+  useEffect(() => {
+    return app.eventBus.on(Events.AGENT_COMPOSER_DRAFT, (payload) => {
+      const nextContext = String(payload?.context || '');
+      const nextBody = String(payload?.body || '');
+      const nextMentions = Array.isArray(payload?.mentions) ? payload.mentions : [];
+      setContext(nextContext);
+      setContextOpen(false);
+      setDraft(nextBody);
+      setMentions(nextMentions);
+      setMenu(null);
+      requestAnimationFrame(() => {
+        if (inputRef.current) {
+          inputRef.current.style.height = 'auto';
+          inputRef.current.style.height = `${inputRef.current.scrollHeight}px`;
+          inputRef.current.focus();
+        }
+      });
+      onFocus?.();
+    });
+  }, [app, onFocus]);
 
   const settingsModel = app.llmService.modelFor('agentModel');
   const chosen = model || settingsModel;
@@ -121,10 +147,12 @@ export function AgentComposer({ permission, model, busy, catalog, onPermission, 
   }
 
   function send() {
-    const text = draft.trim();
-    if (!text || busy) return;
-    onSend(text, mentions);
+    const body = draft.trim();
+    if ((!body && !context.trim()) || busy) return;
+    onSend(packAgentUserMessage(context, body || '（无正文）'), mentions);
     setDraft('');
+    setContext('');
+    setContextOpen(false);
     setMentions([]);
     setMenu(null);
     if (inputRef.current) inputRef.current.style.height = 'auto';
@@ -152,10 +180,13 @@ export function AgentComposer({ permission, model, busy, catalog, onPermission, 
     send();
   }
 
+  const canSend = Boolean(draft.trim() || context.trim());
+
   return (
     <form
       ref={formRef}
       className="agent-bar"
+      data-agent-composer="bar"
       {...imeCompositionProps(ime)}
       onSubmit={(event) => {
         event.preventDefault();
@@ -163,23 +194,35 @@ export function AgentComposer({ permission, model, busy, catalog, onPermission, 
         send();
       }}
     >
+      <AgentContextPill
+        text={context}
+        open={contextOpen}
+        editable
+        onOpenChange={setContextOpen}
+        onChange={setContext}
+        onRemove={() => { setContext(''); setContextOpen(false); }}
+      />
       {mentions.length ? (
         <div className="agent-chips">
           {mentions.map((item) => (
-            <button
-              key={`${item.kind}:${item.id}`}
-              type="button"
-              className="agent-chip"
-              onClick={() => setMentions((current) => current.filter((entry) => entry.id !== item.id || entry.kind !== item.kind))}
-            >
-              {item.label}
-            </button>
+            <span key={`${item.kind}:${item.id}`} className="agent-chip is-static">
+              <span>{item.label}</span>
+              <button
+                type="button"
+                className="agent-chip-remove"
+                aria-label={`去掉 ${item.label}`}
+                onClick={() => setMentions((current) => current.filter((entry) => entry.id !== item.id || entry.kind !== item.kind))}
+              >
+                <Symbol name="close" size={10} />
+              </button>
+            </span>
           ))}
         </div>
       ) : null}
       <textarea
         ref={inputRef}
         className="agent-input"
+        data-agent-composer="input"
         rows={1}
         value={draft}
         placeholder="今天帮你做些什么？"
@@ -228,7 +271,7 @@ export function AgentComposer({ permission, model, busy, catalog, onPermission, 
         <button
           type={busy ? 'button' : 'submit'}
           className="agent-send"
-          disabled={!busy && !draft.trim()}
+          disabled={!busy && !canSend}
           aria-label={busy ? '停止' : '发送'}
           onClick={() => { if (busy) onStop?.(); }}
         >

@@ -3,8 +3,6 @@ import { useApp, useShell } from '../../app/context.jsx';
 import { IDEA_LIST_WIDTH, normalizeIdeaListWidth } from '../../../infrastructure/storage/ui-prefs-repository.js';
 import { IdeaEditor } from './IdeaEditor.jsx';
 import { IdeaListView } from './IdeaListView.jsx';
-import { IdeaPickupModal } from './IdeaPickupModal.jsx';
-import { IdeaStatusFilter } from './IdeaStatusFilter.jsx';
 
 function clampIdeaListWidth(value) {
   const sidebar = document.querySelector('.sidebar')?.getBoundingClientRect().width || 0;
@@ -12,7 +10,7 @@ function clampIdeaListWidth(value) {
   return Math.min(max, Math.max(IDEA_LIST_WIDTH.min, normalizeIdeaListWidth(value)));
 }
 
-export function IdeasPage({ filter, onFilter, openIdeaId, onOpenIdea }) {
+export function IdeasPage({ filter, openIdeaId, onOpenIdea }) {
   const app = useApp();
   useShell();
   const [pickupId, setPickupId] = useState(null);
@@ -80,9 +78,6 @@ export function IdeasPage({ filter, onFilter, openIdeaId, onOpenIdea }) {
   return (
     <div className="ideas-split">
       <aside className="ideas-list" aria-label="灵感列表">
-        <div className="ideas-list-head">
-          <IdeaStatusFilter value={filter} onChange={onFilter} />
-        </div>
         <div className="ideas-list-scroll">
           <IdeaListView filter={filter} selectedId={selected ? selected.id : null} onSelect={onOpenIdea} />
         </div>

@@ -60,6 +60,18 @@ describe('createNote / normalizeNotes', () => {
     expect(normalizeNotes([{ id: 'n1', text: '新的' }], { note: '旧的', subtasks: [{ text: '步骤' }] }))
       .toEqual([{ id: 'n1', text: '新的' }]);
   });
+
+  it('joins a bare breakdown title with the following body', () => {
+    expect(normalizeNotes([
+      { id: 'h', text: '人类任务' },
+      { id: 'hb', text: '亲手做' },
+      { id: 'a', text: 'AI任务' },
+      { id: 'ab', text: '请实现' }
+    ]).map((note) => ({ id: note.id, text: note.text }))).toEqual([
+      { id: 'h', text: '人类任务\n亲手做' },
+      { id: 'a', text: 'AI任务\n请实现' }
+    ]);
+  });
 });
 
 describe('cloneDailyTask', () => {

@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { useApp } from '../../app/context.jsx';
 import { tagPillStyle } from '../../../domain/schedule/fixed-tags.js';
-import { DeleteButton, IconButton, Modal, Symbol } from '../../library/index.js';
+import { DeleteButton, Modal, Symbol } from '../../library/index.js';
 import { holdImeEnter, imeCompositionProps, useImeEnterGuard } from '../../keyboard/ime-enter.js';
 
 export function TagsCard({ tags = [], selectedIds, onToggle }) {
@@ -24,10 +24,6 @@ export function TagsCard({ tags = [], selectedIds, onToggle }) {
 
   return (
     <section className="tag-block">
-      <div className="tag-head">
-        <h2 className="card-title">标签</h2>
-        <IconButton name="plus" label="新建标签" title="新建标签" size={18} onClick={() => setAdding(true)} />
-      </div>
       <div className="tag-board">
         {tags.map((tag) => (
           <span key={tag.id} className={tag.pinned ? 'tag-pill-wrap is-pinned' : 'tag-pill-wrap'}>
@@ -35,6 +31,7 @@ export function TagsCard({ tags = [], selectedIds, onToggle }) {
               type="button"
               className={selected.has(tag.id) ? 'tag-pill is-on' : 'tag-pill'}
               style={tagPillStyle(tag)}
+              title={tag.description || undefined}
               onClick={() => clickTag(tag.id)}
               onDoubleClick={() => editTag(tag.id)}
             >{tag.name}</button>
@@ -58,6 +55,15 @@ export function TagsCard({ tags = [], selectedIds, onToggle }) {
             </button>
           </span>
         ))}
+        <button
+          type="button"
+          className="tag-pill tag-pill-add"
+          aria-label="新建标签"
+          title="新建标签"
+          onClick={() => setAdding(true)}
+        >
+          <Symbol name="plus" size={14} />
+        </button>
       </div>
       {adding ? <TagCreateModal onClose={() => setAdding(false)} /> : null}
       {editing ? <TagEditModal tag={editing} onClose={() => setEditingId(null)} /> : null}
@@ -69,13 +75,14 @@ function TagCreateModal({ onClose }) {
   const app = useApp();
   const ime = useImeEnterGuard();
   const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
 
   function save(event) {
     event.preventDefault();
     if (ime.shouldIgnoreSubmit()) return;
     const trimmed = name.trim();
     if (!trimmed) return;
-    if (!app.scheduleService.addTag(trimmed)) {
+    if (!app.scheduleService.addTag(trimmed, description)) {
       window.alert('名称无效，或已有同名标签');
       return;
     }
@@ -94,6 +101,15 @@ function TagCreateModal({ onClose }) {
             onChange={(event) => setName(event.target.value)}
           />
         </label>
+        <label className="field-label">描述
+          <textarea
+            className="field textarea"
+            rows={3}
+            value={description}
+            placeholder="什么情况下任务属于这个标签"
+            onChange={(event) => setDescription(event.target.value)}
+          />
+        </label>
         <div className="form-actions">
           <button type="button" className="btn" onClick={onClose}>取消</button>
           <button type="submit" className="btn btn-primary">创建</button>
@@ -107,9 +123,26 @@ function TagEditModal({ tag, onClose }) {
   const app = useApp();
   const ime = useImeEnterGuard();
   const [name, setName] = useState(tag.name);
+  const [description, setDescription] = useState(tag.description || '');
+  const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState('');
+
+  async function generate() {
+    if (generating) return;
+    setGenerating(true);
+    setGenerateError('');
+    try {
+      const next = await app.taskTagService.generateDescription(tag.id, { name, description });
+      setDescription(next);
+    } catch (error) {
+      setGenerateError(error?.message || '没有得到可用的描述');
+    } finally {
+      setGenerating(false);
+    }
+  }
 
   function save() {
-    if (!app.scheduleService.renameTag(tag.id, name)) {
+    if (!app.scheduleService.renameTag(tag.id, name, description)) {
       window.alert('名称无效，或已有同名标签');
       return;
     }
@@ -131,6 +164,23 @@ function TagEditModal({ tag, onClose }) {
             save();
           }} />
         </label>
+        <div>
+          <div className="tag-description-head">
+            <span className="field-label">描述</span>
+            <button type="button" className="btn btn-quiet" disabled={generating} onClick={generate}>
+              {generating ? '正在生成…' : '生成描述'}
+            </button>
+          </div>
+          <textarea
+            className="field textarea"
+            rows={3}
+            value={description}
+            aria-label="描述"
+            placeholder="什么情况下任务属于这个标签"
+            onChange={(event) => setDescription(event.target.value)}
+          />
+          {generateError ? <p className="task-break-error">{generateError}</p> : null}
+        </div>
         <div className="form-actions">
           <DeleteButton onClick={remove} />
           <button type="button" className="btn" onClick={onClose}>取消</button>

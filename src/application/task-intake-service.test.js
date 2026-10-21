@@ -11,7 +11,6 @@ import { LocalStorageAdapter } from '../infrastructure/storage/local-storage-ada
 import { ScheduleRepository } from '../infrastructure/storage/schedule-repository.js';
 import { WorkspaceRepository } from '../infrastructure/storage/workspace-repository.js';
 import { DEFAULT_JEV_MODEL } from '../infrastructure/storage/llm-settings-repository.js';
-import { AI_TASK_TITLE, HUMAN_TASK_TITLE } from '../domain/schedule/task-breakdown.js';
 import { JEV_QUESTIONS } from '../domain/schedule/task-jev.js';
 
 function createSchedule() {
@@ -103,13 +102,13 @@ function createIntake(schedule, options = {}) {
     jevService,
     taskTagService: options.taskTagService || new TaskTagService({ scheduleService: schedule, llmService: languageModel }),
     taskStandardizeService: options.taskStandardizeService || new TaskStandardizeService({ scheduleService: schedule, llmService: languageModel }),
-    taskBreakdownService: options.taskBreakdownService || new TaskBreakdownService({ scheduleService: schedule, llmService: languageModel })
+    taskBreakdownService: options.taskBreakdownService || new TaskBreakdownService({ scheduleService: schedule })
   });
   return { service, calls, evaluations };
 }
 
 describe('TaskIntakeService', () => {
-  it('classifies first, then asks both questions about the tagged task in one request', async () => {
+  it('skips classification when the task already has a tag, then judges with that tag', async () => {
     const schedule = createSchedule();
     const life = schedule.addTag('生活');
     const task = schedule.addTask('required', '下午跟张三对一下标签菜单', [life.id]);
@@ -118,38 +117,37 @@ describe('TaskIntakeService', () => {
 
     await service.settle('required', task.id);
 
-    expect(calls.map((call) => call.kind)).toEqual(['tag']);
+    expect(calls.map((call) => call.kind)).toEqual([]);
     expect(evaluations).toHaveLength(1);
     expect(evaluations[0].model).toBe(DEFAULT_JEV_MODEL);
     expect(evaluations[0].questions).toBe(JEV_QUESTIONS);
     expect(evaluations[0].state).toEqual({
       title: '下午跟张三对一下标签菜单',
       notes: ['确认说明会不会丢'],
-      projects: ['生活', '日程']
+      projects: ['生活']
     });
-    expect(schedule.getCurrentData().required[0].text).toBe('下午跟张三对一下标签菜单');
+    expect(schedule.getCurrentData().required[0].tagIds).toEqual([life.id]);
+    expect(schedule.workspace.tags.map((tag) => tag.name)).toEqual(['生活']);
   });
 
-  it('standardizes before breakdown when both nouls are high enough', async () => {
+  it('standardizes when that noul is high enough, and does not silently break down', async () => {
     const schedule = createSchedule();
     const task = schedule.addTask('required', '下午跟张三对一下标签菜单，确认说明会不会丢');
+    let brokeDown = false;
     const { service, calls } = createIntake(schedule, {
       answers: {
         standardize: { type: 'noul', noul: 0.5 },
         breakdown: { type: 'noul', noul: 0.8 }
-      }
+      },
+      taskBreakdownService: { prepareComposer: () => { brokeDown = true; } }
     });
 
     await service.settle('required', task.id);
-    expect(calls.map((call) => call.kind)).toEqual(['tag', 'standardize', 'breakdown']);
+    expect(calls.map((call) => call.kind)).toEqual(['tag', 'standardize']);
+    expect(brokeDown).toBe(false);
     const saved = schedule.getCurrentData().required[0];
     expect(saved.text).toBe('对一下菜单');
-    expect(calls.find((call) => call.kind === 'breakdown').user).toContain('标题：对一下菜单');
-    expect(saved.notes.map((note) => note.text.split('\n')[0])).toEqual([
-      '下午跟张三对一下标签菜单，确认说明会不会丢',
-      HUMAN_TASK_TITLE,
-      AI_TASK_TITLE
-    ]);
+    expect(saved.notes.map((note) => note.text)).toEqual(['下午跟张三对一下标签菜单，确认说明会不会丢']);
   });
 
   it('runs only the action whose noul clears the threshold', async () => {
@@ -168,23 +166,26 @@ describe('TaskIntakeService', () => {
     expect(saved.notes.map((note) => note.text)).toEqual(['下午跟张三对一下标签菜单，确认说明会不会丢']);
   });
 
-  it('breaks down without standardizing when only that noul is high enough', async () => {
+  it('ignores a high breakdown noul because silent breakdown is off', async () => {
     const schedule = createSchedule();
     const task = schedule.addTask('required', '买菜');
+    let brokeDown = false;
     const { service } = createIntake(schedule, {
       answers: {
         standardize: { type: 'choice', choice: 'yes' },
         breakdown: { type: 'noul', noul: 1 }
-      }
+      },
+      taskBreakdownService: { prepareComposer: () => { brokeDown = true; } }
     });
 
     await service.settle('required', task.id);
     const saved = schedule.getCurrentData().required[0];
     expect(saved.text).toBe('买菜');
-    expect(saved.notes.map((note) => note.text.split('\n')[0])).toEqual([HUMAN_TASK_TITLE, AI_TASK_TITLE]);
+    expect(saved.notes).toEqual([]);
+    expect(brokeDown).toBe(false);
   });
 
-  it('still judges after classification fails, and still breaks down after standardization fails', async () => {
+  it('still judges after classification fails, and keeps going when standardization fails', async () => {
     const schedule = createSchedule();
     const task = schedule.addTask('required', '买菜');
     let brokeDown = false;
@@ -195,30 +196,27 @@ describe('TaskIntakeService', () => {
       },
       taskTagService: { createForTask: async () => { throw new Error('分类失败'); } },
       taskStandardizeService: { standardize: async () => { throw new Error('标准化失败'); } },
-      taskBreakdownService: { breakdown: async () => { brokeDown = true; } }
+      taskBreakdownService: { prepareComposer: () => { brokeDown = true; } }
     });
 
     await expect(service.settle('required', task.id)).resolves.toBeUndefined();
     expect(evaluations).toHaveLength(1);
-    expect(brokeDown).toBe(true);
+    expect(brokeDown).toBe(false);
     expect(schedule.getCurrentData().required[0].text).toBe('买菜');
   });
 
-  it('stops before breakdown when the task disappears during standardization', async () => {
+  it('survives when the task disappears during standardization', async () => {
     const schedule = createSchedule();
     const task = schedule.addTask('required', '买菜');
-    let brokeDown = false;
     const { service } = createIntake(schedule, {
       answers: {
         standardize: { type: 'noul', noul: 0.9 },
         breakdown: { type: 'noul', noul: 0.9 }
       },
-      taskStandardizeService: { standardize: async () => { schedule.deleteTask('required', task.id); } },
-      taskBreakdownService: { breakdown: async () => { brokeDown = true; } }
+      taskStandardizeService: { standardize: async () => { schedule.deleteTask('required', task.id); } }
     });
 
     await service.settle('required', task.id);
-    expect(brokeDown).toBe(false);
     expect(schedule.getCurrentData().required).toEqual([]);
   });
 

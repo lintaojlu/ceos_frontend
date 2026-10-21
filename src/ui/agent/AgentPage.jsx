@@ -13,7 +13,7 @@ export function AgentPage() {
   const [error, setError] = useState('');
   const logRef = useRef(null);
   const tail = view.messages[view.messages.length - 1];
-  useStickToBottom(logRef, `${tail?.text || ''}:${view.arranging}:${view.rows.length}`);
+  useStickToBottom(logRef, `${tail?.text || ''}:${(tail?.events || []).length}:${view.phase}:${view.arranging}:${view.rows.length}`);
 
   useEffect(() => {
     setError('');
@@ -30,6 +30,13 @@ export function AgentPage() {
           tags={tags}
           busy={view.busy}
           arranging={view.arranging}
+          phase={view.phase}
+          pendingChoice={view.pendingChoice}
+          onAnswerChoice={async (answers) => {
+            setError('');
+            const result = await threads.answerChoice(answers);
+            if (!result.ok && result.error) setError(result.error);
+          }}
           onEdit={(id, patch) => { threads.editRow(id, patch); }}
           onDrop={(id) => { threads.dropRow(id); }}
           onMove={(id, direction) => { threads.moveRow(id, direction); }}

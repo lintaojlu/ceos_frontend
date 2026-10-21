@@ -85,17 +85,18 @@ describe('TaskTagService', () => {
         async (input) => {
           seen = input;
           schedule.setCurrentDate(addDays(origin, 1));
-          return '{"project":"日程 代理"}';
+          return '{"project":"日程 代理","description":"和日程代理的对话、工具有关"}';
         }
       )
     });
     await expect(service.createForTask('required', task.id)).resolves.toBe('日程 代理');
     expect(seen.model).toBe('tiny-model');
-    expect(seen.system).toContain('{"project":"<项目名>"}');
+    expect(seen.system).toContain('{"project":"<项目名>","description":"<描述>"}');
     expect(seen.user).toContain('任务名称：\n写右键菜单');
     expect(seen.user).toContain('先画菜单\n再接保存');
     expect(seen.user).toContain('现有项目：\n生活');
     expect(schedule.workspace.tags.map((tag) => tag.name)).toEqual(['生活', '日程 代理']);
+    expect(schedule.workspace.tags[1].description).toBe('和日程代理的对话、工具有关');
     expect(schedule.workspace.tags[1].color).toBe(TAG_PALETTE[1]);
     expect(schedule.data[originKey].required[0].tagIds).toEqual([schedule.workspace.tags[1].id]);
     schedule.setCurrentDate(addDays(origin, 1));
@@ -104,18 +105,34 @@ describe('TaskTagService', () => {
 
   it('reuses an existing tag with the same name', async () => {
     const schedule = createSchedule();
-    const existing = schedule.addTag('日程');
+    const existing = schedule.addTag('日程', '已经写好的边界');
     const task = schedule.addTask('required', '写菜单');
     const service = new TaskTagService({
       scheduleService: schedule,
       llmService: llm(
         { baseUrl: 'https://example.com/v1', fullUrl: false, apiKey: 'k', model: 'big', tagModel: 'tiny' },
-        async () => '{"project":"日程"}'
+        async () => '{"project":"日程","description":"不该盖掉"}'
       )
     });
     await service.createForTask('required', task.id);
     expect(schedule.workspace.tags).toHaveLength(1);
+    expect(schedule.workspace.tags[0].description).toBe('已经写好的边界');
     expect(schedule.getCurrentData().required[0].tagIds).toEqual([existing.id]);
+  });
+
+  it('does not create or attach a tag when the model answers other', async () => {
+    const schedule = createSchedule();
+    const task = schedule.addTask('required', '写菜单');
+    const service = new TaskTagService({
+      scheduleService: schedule,
+      llmService: llm(
+        { baseUrl: 'https://example.com/v1', fullUrl: false, apiKey: 'k', model: 'big', tagModel: 'tiny' },
+        async () => '{"project":"other","description":""}'
+      )
+    });
+    await expect(service.createForTask('required', task.id)).resolves.toBeNull();
+    expect(schedule.workspace.tags).toEqual([]);
+    expect(schedule.getCurrentData().required[0].tagIds).toEqual([]);
   });
 
   it('creates the tag from the task title when the model returns nothing or invalid JSON', async () => {
@@ -158,5 +175,35 @@ describe('TaskTagService', () => {
     await expect(service.createForTask('required', task.id)).resolves.toBe('相册瘦身整理计划超出十字');
     expect(schedule.workspace.tags).toHaveLength(2);
     expect(schedule.getCurrentData().required[0].tagIds).toEqual([other.id, existing.id]);
+  });
+
+  it('writes a description from the tag’s tasks and the current text, without saving', async () => {
+    const schedule = createSchedule();
+    const tag = schedule.addTag('ceos', '旧描述');
+    const task = schedule.addTask('required', '旧标题');
+    schedule.updateTask('required', task.id, { tagIds: [tag.id], notes: [{ id: 'n1', text: '旧说明' }] });
+    const origin = schedule.currentDate;
+    schedule.setCurrentDate(addDays(origin, 1));
+    schedule.insertTask('required', { ...schedule.data[getDateKey(origin)].required[0], text: '写菜单', notes: [{ id: 'n1', text: '先画菜单' }] });
+    let seen = null;
+    const service = new TaskTagService({
+      scheduleService: schedule,
+      llmService: llm(
+        { baseUrl: 'https://example.com/v1', fullUrl: false, apiKey: 'k', model: 'big', tagModel: 'tiny' },
+        async (input) => {
+          seen = input;
+          return '{"description":"和 CEOS 应用的设计与开发有关"}';
+        }
+      )
+    });
+    await expect(service.generateDescription(tag.id, { name: 'CEOS', description: '正在改的描述' })).resolves.toBe('和 CEOS 应用的设计与开发有关');
+    expect(seen.model).toBe('tiny');
+    expect(seen.system).toContain('{"description":"<描述>"}');
+    expect(seen.user).toContain('标签名称：\nCEOS');
+    expect(seen.user).toContain('现有描述：\n正在改的描述');
+    expect(seen.user).toContain('写菜单');
+    expect(seen.user).toContain('先画菜单');
+    expect(seen.user).not.toContain('旧标题');
+    expect(schedule.workspace.tags[0].description).toBe('旧描述');
   });
 });

@@ -4,7 +4,8 @@
  */
 
 import { LlmRequestError } from './llm-service.js';
-import { TAG_NAME_SYSTEM, buildTagNamePrompt, projectNameFromModel } from '../domain/schedule/tag-name.js';
+import { TAG_DESCRIPTION_SYSTEM, buildTagDescriptionPrompt, descriptionFromModel, tasksForTag } from '../domain/schedule/tag-description.js';
+import { TAG_NAME_SYSTEM, buildTagNamePrompt, projectFromModel } from '../domain/schedule/tag-name.js';
 
 export class TaskTagService {
   /**
@@ -20,7 +21,7 @@ export class TaskTagService {
   /**
    * @param {'required'|'optional'} type
    * @param {string} taskId
-   * @returns {Promise<string>}
+   * @returns {Promise<string|null>}
    */
   async createForTask(type, taskId) {
     const dateKey = this.scheduleService.getDateKey();
@@ -29,12 +30,15 @@ export class TaskTagService {
 
     const title = String(task.text || '').trim();
     const notes = (Array.isArray(task.notes) ? task.notes : []).map((note) => note?.text || '');
-    const projects = (this.scheduleService.workspace.tags || []).map((tag) => tag?.name || '');
+    const projects = (this.scheduleService.workspace.tags || []).map((tag) => ({
+      name: tag?.name || '',
+      description: tag?.description || ''
+    }));
     let raw = '';
     try {
       raw = await this.llmService.complete({
         slot: 'tagModel',
-        maxTokens: 64,
+        maxTokens: 200,
         system: TAG_NAME_SYSTEM,
         user: buildTagNamePrompt({ title, notes, projects })
       });
@@ -42,11 +46,35 @@ export class TaskTagService {
       if (error instanceof LlmRequestError && error.code === 'not-configured') throw error;
       raw = '';
     }
-    const name = projectNameFromModel(raw, title, projects);
-    if (!name) throw new Error('没有得到可用的标签名');
+    const draft = projectFromModel(raw, title, projects);
+    if (draft.skipped) return null;
+    if (!draft.name) throw new Error('没有得到可用的标签名');
 
-    const saved = this.scheduleService.attachTagNamed(type, taskId, name, dateKey);
+    const saved = this.scheduleService.attachTagNamed(type, taskId, draft.name, dateKey, draft.description);
     if (!saved) throw new Error('这条任务已经不在了');
-    return name;
+    return draft.name;
+  }
+
+  /**
+   * 根据这个标签在各天的任务，以及调用方传来的现有描述，生成一句新描述。不写入。
+   * @param {string} tagId
+   * @param {{ name?: string, description?: string }} [draft]
+   * @returns {Promise<string>}
+   */
+  async generateDescription(tagId, draft = {}) {
+    const tag = (this.scheduleService.workspace.tags || []).find((item) => item.id === tagId);
+    if (!tag) throw new Error('这个标签已经不在了');
+    const name = String(draft.name ?? tag.name ?? '').trim() || tag.name;
+    const description = draft.description !== undefined ? draft.description : (tag.description || '');
+    const tasks = tasksForTag(this.scheduleService.data, tagId);
+    const raw = await this.llmService.complete({
+      slot: 'tagModel',
+      maxTokens: 200,
+      system: TAG_DESCRIPTION_SYSTEM,
+      user: buildTagDescriptionPrompt({ name, description, tasks })
+    });
+    const next = descriptionFromModel(raw);
+    if (!next) throw new Error('没有得到可用的描述');
+    return next;
   }
 }

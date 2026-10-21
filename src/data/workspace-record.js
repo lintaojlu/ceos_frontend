@@ -25,6 +25,7 @@
  * @typedef {Object} TagRecord
  * @property {string} id
  * @property {string} name
+ * @property {string} description 什么情况下任务属于这个标签
  * @property {string} color
  * @property {boolean} pinned
  */
@@ -110,7 +111,13 @@ export function normalizeTags(raw) {
     if (!tag?.id || !name || names.has(name)) return;
     names.add(name);
     const color = typeof tag.color === 'string' && tag.color ? tag.color : '';
-    tags.push({ id: String(tag.id), name, color, pinned: tag.pinned === true });
+    tags.push({
+      id: String(tag.id),
+      name,
+      description: String(tag.description || '').trim(),
+      color,
+      pinned: tag.pinned === true
+    });
   });
   return tags;
 }

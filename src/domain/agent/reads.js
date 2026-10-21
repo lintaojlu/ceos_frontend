@@ -33,9 +33,13 @@ function dayLists(schedule, date) {
   };
 }
 
-/** @param {Array<{ id: string, name: string }>} tags */
+/** @param {Array<{ id: string, name: string, description?: string }>} tags */
 export function readListTags(tags) {
-  return (tags || []).map((tag) => ({ id: tag.id, name: tag.name || '' }));
+  return (tags || []).map((tag) => ({
+    id: tag.id,
+    name: tag.name || '',
+    description: tag.description || ''
+  }));
 }
 
 /**

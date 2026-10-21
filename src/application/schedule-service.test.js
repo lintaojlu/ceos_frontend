@@ -99,11 +99,14 @@ describe('tags on daily tasks', () => {
 
   it('renames a tag without rewriting task ids', () => {
     const service = createService();
-    const tag = service.addTag('CEOS');
+    const tag = service.addTag('CEOS', '和 CEOS 这个应用有关');
     const task = service.addTask('required', '写计划', tag.id);
-    expect(service.renameTag(tag.id, '日程')).toBeTruthy();
+    expect(service.renameTag(tag.id, '日程', '  和日程应用的设计与开发有关  ')).toBeTruthy();
     expect(service.workspace.tags.find((item) => item.id === tag.id).name).toBe('日程');
+    expect(service.workspace.tags.find((item) => item.id === tag.id).description).toBe('和日程应用的设计与开发有关');
     expect(service.getCurrentData().required[0].tagIds).toEqual(task.tagIds);
+    service.load();
+    expect(service.workspace.tags.find((item) => item.id === tag.id).description).toBe('和日程应用的设计与开发有关');
   });
 
   it('copies unfinished tasks from a chosen day, not only yesterday', () => {

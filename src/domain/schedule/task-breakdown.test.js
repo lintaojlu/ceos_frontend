@@ -5,10 +5,14 @@ import {
   BREAKDOWN_SYSTEM,
   HUMAN_TASK_TITLE,
   buildBreakdownPrompt,
+  coalesceBreakdownSubtasks,
+  mergeBreakdownSubtasks,
   noteBody,
+  packAgentUserMessage,
   parseBreakdown,
   replaceBreakdownNotes,
-  selectRelatedTasks
+  selectRelatedTasks,
+  splitAgentUserMessage
 } from './task-breakdown.js';
 
 const days = {
@@ -131,5 +135,48 @@ describe('replaceBreakdownNotes', () => {
     ]);
     expect(notes[0].id).toBe('hand');
     expect(noteBody(notes[3].text)).toBe('新 prompt');
+  });
+});
+
+describe('coalesceBreakdownSubtasks', () => {
+  it('joins a bare title with the next body into one note', () => {
+    expect(coalesceBreakdownSubtasks([
+      HUMAN_TASK_TITLE,
+      '亲手做',
+      AI_TASK_TITLE,
+      '请实现'
+    ])).toEqual([
+      `${HUMAN_TASK_TITLE}\n亲手做`,
+      `${AI_TASK_TITLE}\n请实现`
+    ]);
+  });
+});
+
+describe('mergeBreakdownSubtasks', () => {
+  it('keeps handwritten notes when the model only returns the two titled ones', () => {
+    expect(mergeBreakdownSubtasks(
+      ['手写', `${HUMAN_TASK_TITLE}\n旧`, `${AI_TASK_TITLE}\n旧`],
+      [`${HUMAN_TASK_TITLE}\n新`, `${AI_TASK_TITLE}\n新`]
+    )).toEqual(['手写', `${HUMAN_TASK_TITLE}\n新`, `${AI_TASK_TITLE}\n新`]);
+  });
+
+  it('coalesces a four-item split before merging', () => {
+    expect(mergeBreakdownSubtasks(
+      ['手写'],
+      [HUMAN_TASK_TITLE, '亲手做', AI_TASK_TITLE, '请实现']
+    )).toEqual(['手写', `${HUMAN_TASK_TITLE}\n亲手做`, `${AI_TASK_TITLE}\n请实现`]);
+  });
+
+  it('leaves an ordinary update alone', () => {
+    expect(mergeBreakdownSubtasks(['手写'], ['只要这一条'])).toEqual(['只要这一条']);
+  });
+});
+
+describe('packAgentUserMessage', () => {
+  it('round-trips context and body', () => {
+    const packed = packAgentUserMessage('规则\n材料', '请拆解');
+    expect(packed).toContain('【上下文】');
+    expect(splitAgentUserMessage(packed)).toEqual({ context: '规则\n材料', body: '请拆解' });
+    expect(splitAgentUserMessage('普通一句话')).toEqual({ context: '', body: '普通一句话' });
   });
 });

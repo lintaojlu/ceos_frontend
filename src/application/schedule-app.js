@@ -76,8 +76,7 @@ export class ScheduleApp {
     });
 
     this.taskBreakdownService = new TaskBreakdownService({
-      scheduleService: this.scheduleService,
-      llmService: this.llmService
+      scheduleService: this.scheduleService
     });
 
     this.ideaPickupService = new IdeaPickupService({

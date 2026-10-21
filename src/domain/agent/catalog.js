@@ -21,7 +21,7 @@ function tool(name, description, properties, required) {
 }
 
 export const READ_TOOLS = [
-  tool('list_tags', '列出已有标签的 id 和名字。', {}, []),
+  tool('list_tags', '列出已有标签的 id、名字和描述。描述说明什么情况下任务属于该标签。', {}, []),
   tool('list_ready_ideas', '列出当前可以捡起的灵感。只有标题。', {}, []),
   tool('read_idea', '读取一条灵感的标题和 Markdown 正文。不含图片。', { ideaId: { type: 'string' } }, ['ideaId']),
   tool('list_day', '列出某一天的全部必做和选做，含已完成。', { date: DATE }, ['date']),
@@ -118,17 +118,52 @@ const UPDATE_IDEA = tool(
   ['ideaId', 'text', 'note', 'completed']
 );
 
+const ASK_CHOICES = tool(
+  'ask_choices',
+  '信息不够清楚时，向用户出示一道或多道选择题。调用后等待用户回答，不要同时改日程。',
+  {
+    questions: {
+      type: 'array',
+      description: '题目列表。一次可以多道，界面里左右翻题。',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: '本题 id，一轮内唯一' },
+          prompt: { type: 'string', description: '题干' },
+          options: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                label: { type: 'string' }
+              },
+              required: ['id', 'label'],
+              additionalProperties: false
+            }
+          },
+          allowOther: { type: 'boolean', description: '是否提供「其他补充」。默认 true。' }
+        },
+        required: ['id', 'prompt', 'options'],
+        additionalProperties: false
+      }
+    }
+  },
+  ['questions']
+);
+
 /**
  * @param {{ allowCreate: boolean, allowRemove: boolean }} turn
  * @param {'default'|'read'|'auto'} [permission]
  */
 export function toolsForTurn(turn, permission = 'default') {
-  if (permission === 'read') return READ_TOOLS.slice();
+  if (permission === 'read') return [...READ_TOOLS, ASK_CHOICES];
   const writes = [UPDATE, PICKUP, COPY, CREATE_IDEA, UPDATE_IDEA];
   if (turn.allowCreate) writes.push(CREATE);
   if (turn.allowRemove) writes.push(REMOVE);
-  return [...READ_TOOLS, ...writes];
+  return [...READ_TOOLS, ASK_CHOICES, ...writes];
 }
 
 export const WRITE_NAMES = new Set(['create_task', 'update_task', 'remove_task', 'pickup_idea', 'copy_open_task', 'create_idea', 'update_idea']);
 export const READ_NAMES = new Set(READ_TOOLS.map((item) => item.function.name));
+export const CHOICE_NAMES = new Set(['ask_choices']);

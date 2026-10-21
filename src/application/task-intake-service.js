@@ -1,5 +1,5 @@
 /**
- * 任务页回车新建之后静默跑一遍：先分类，再一次问 JEV 要不要标准化和拆解。
+ * 任务页回车新建之后静默跑一遍：没有标签才分类，再一次问 JEV 要不要标准化和拆解。
  * 失败不抛出，也不写到任务行上。
  */
 
@@ -40,13 +40,7 @@ export class TaskIntakeService {
           // 静默。失败不写到任务行。
         }
       }
-      if (decision.breakdown && this.read(type, taskId)) {
-        try {
-          await this.taskBreakdownService.breakdown(type, taskId);
-        } catch {
-          // 静默。失败不写到任务行。
-        }
-      }
+      // 静默拆解先关掉：拆解改走输入框 + agent，避免往对话里自动灌消息。
     } catch {
       // 静默。整段流程都不打断新建。
     }
@@ -57,6 +51,8 @@ export class TaskIntakeService {
    * @param {string} taskId
    */
   async classify(type, taskId) {
+    const task = this.scheduleService.findTaskOnDate(this.scheduleService.getDateKey(), type, taskId);
+    if (task && normalizeTagIds(task).length > 0) return;
     try {
       await this.taskTagService.createForTask(type, taskId);
     } catch {
